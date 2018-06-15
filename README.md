@@ -1,1 +1,2 @@
-# simple_auv_planning
+# Simple AUV Planning
+Project for planning course.
