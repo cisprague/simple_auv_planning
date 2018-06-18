@@ -96,7 +96,10 @@ class Farm(object):
         pts = self.simple_coverage()
         ax.plot(pts.T[0], pts.T[1], "k.-")
 
-        return fig
+        try:
+            return fig
+        except:
+            return ax
 
     def simple_coverage(self):
 

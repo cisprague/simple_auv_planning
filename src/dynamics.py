@@ -20,10 +20,10 @@ class Dynamics(object):
         self.bound = bool(True)
 
         # state dimensions
-        self.sdim = 4
+        self.sdim = int(4)
 
         # control dimensions
-        self.udim = 3
+        self.udim = int(3)
 
     def eom_state(self, state, control):
 

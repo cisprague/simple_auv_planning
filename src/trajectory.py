@@ -3,6 +3,7 @@
 
 import segment
 import numpy as np, pygmo as pg
+from pathos.multiprocessing import ProcessingPool as Pool
 
 class Trajectory(object):
 
@@ -10,6 +11,9 @@ class Trajectory(object):
 
         # dynamics
         self.dynamics = dynamics
+
+        # parallel
+        self.pool = Pool(8)
 
     def set_bounds(self, Tlb, Tub, slb, sub):
 
@@ -22,42 +26,70 @@ class Trajectory(object):
         # compute number of segments
         self.nseg = len(self.slb) - 1
 
+    @staticmethod # NOTE: static for multiprocessing!
+    def parallel_propagate(segment):
+        segment.propagate()
+        return segment
+
     def propagate(self):
-        return np.array([seg.propagate() for seg in self.segments], float)
+        self.segments = self.pool.map(lambda seg: seg.propagate(), self.segments)
+        #[self.segments[i].propagate() for i in range(self.nseg)]
+
+    def process_records(self):
+
+        # combine segment records
+        self.states = np.vstack(([seg.states for seg in self.segments]))
+        self.controls = np.apply_along_axis(self.dynamics.pontryagin, 1, self.states)
+
+        # adjust durations
+        for i in range(self.nseg - 1):
+            self.segments[i + 1].times += self.segments[i].T
+
+        # update times
+        self.times = np.hstack((seg.times for seg in self.segments))
 
     def get_nobj(self):
         return 1
 
+    def get_nic(self):
+        return self.nseg
 
     def gradient(self, z):
         return pg.estimate_gradient(self.fitness, z)
 
-    def solve(self, otol=1e-5):
+    def solve(self, otol=1e-5, zguess=None, seperate=False):
 
-        # set optimisation params
-        self.otol = otol
+        if seperate:
+            self.segments = self.pool.map(lambda seg: seg.solve(), self.segments)
+            #[seg.solve() for seg in self.segments]
 
-        # instantiate optimisation problem
-        prob = pg.problem(self)
+        else:
+            # set optimisation params
+            self.otol = otol
 
-        # instantiate algorithm
-        algo = pg.ipopt()
-        algo.set_numeric_option("tol", self.otol)
-        algo = pg.algorithm(algo)
-        algo.set_verbosity(1)
+            # instantiate optimisation problem
+            prob = pg.problem(self)
 
-        # instantiate and evolve population
-        pop = pg.population(prob, 1)
-        pop = algo.evolve(pop)
+            # instantiate algorithm
+            algo = pg.ipopt()
+            algo.set_numeric_option("tol", self.otol)
+            algo = pg.algorithm(algo)
+            algo.set_verbosity(1)
 
-        # extract soltution
-        self.zopt = pop.champion_x
-        self.fitness(self.zopt)
+            # instantiate and evolve population
+            if zguess is None:
+                pop = pg.population(prob, 1)
+            else:
+                pop = pg.population(prob, 0)
+                pop.push_back(zguess)
+            pop = algo.evolve(pop)
+
+            # extract soltution
+            self.zopt = pop.champion_x
+            self.fitness(self.zopt)
 
         # combine records
-        self.states = np.vstack(([seg.states for seg in self.segments]))
-        self.times = np.hstack((seg.times for seg in self.segments))
-        self.controls = np.apply_along_axis(self.dynamics.pontryagin, 1, self.states)
+        self.process_records()
 
 class Indirect(Trajectory):
 
@@ -73,6 +105,10 @@ class Indirect(Trajectory):
 
         # instantiate indirect segments
         self.segments = [segment.Indirect(self.dynamics) for i in range(self.nseg)]
+
+        # set segment bounds
+        for i in range(self.nseg):
+            self.segments[i].set_bounds(Tlb, Tub, slb[i], sub[i], slb[i+1], sub[i+1])
 
     def set(self, times, states, costates):
 
@@ -102,7 +138,7 @@ class Indirect(Trajectory):
         # return bounds
         return (lb, ub)
 
-    def fitness(self, z):
+    def decode(self, z):
 
         # extract durations, states, and costates
         T, s, l = np.hsplit(z[self.dynamics.sdim:].reshape((self.nseg, 1 + self.dynamics.sdim*2)), [1, 1 + self.dynamics.sdim])
@@ -110,12 +146,43 @@ class Indirect(Trajectory):
         s = np.vstack((z[:self.dynamics.sdim], s))
         # node times
         t = np.hstack((0, T.cumsum()))
+        return t, s, l
+
+
+    def fitness(self, z):
+
+        # extract durations, states, and costates
+        t, s, l = self.decode(z)
 
         # set trajectory
         self.set(t, s, l)
 
-        # compute mismatches
-        ceq = np.hstack([seg.mismatch() for seg in self.segments])
+        # propagate trajectories
+        self.propagate()
+
+        # constrait vector
+        con = list()
+
+        # equality constraints
+        for i in range(self.nseg):
+
+            # segment
+            seg = self.segments[i]
+
+            # final fullstate
+            fsf = seg.states[-1]
+
+            # final state
+            sf = fsf[:self.dynamics.sdim]
+
+            # compute mismatch
+            con.append(sf - seg.sf)
+
+        # inquality constraints
+        con.append([t[i] - t[i+1] for i in range(self.nseg)])
+
+        # return fitness
+        return np.hstack(([1], *con))
 
         # enforce smoothness
         '''
@@ -131,11 +198,5 @@ class Indirect(Trajectory):
             ceq = np.hstack((ceq, l0 - lf))
         '''
 
-        # enforce time order
-        #ciq = [t[i] - t[i+1] for i in range(self.nseg)]
-
-        # return fitness
-        return np.hstack(([1], ceq))
-
     def get_nec(self):
-        return self.dynamics.sdim*self.nseg #+ self.dynamics.sdim*(self.nseg - 1)
+        return self.dynamics.sdim*self.nseg# + self.dynamics.sdim*(self.nseg - 1)

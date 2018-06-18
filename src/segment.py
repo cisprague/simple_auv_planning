@@ -15,7 +15,7 @@ class Segment(object):
         self.integrator = ode(self.eom, self.eom_jac)
 
         # configure integrator
-        self.integrator.set_integrator('dop853', atol=1e-10, rtol=1e-10, verbosity=1)
+        self.integrator.set_integrator('dop853', atol=1e-14, rtol=1e-14, verbosity=1)
 
         # set recorder
         self.integrator.set_solout(self.record)
@@ -91,17 +91,13 @@ class Segment(object):
         # process records
         self.process_records()
 
+        return self
+
     def gradient(self, z):
         return pg.estimate_gradient(self.fitness, z)
 
-    def plot(self, ax=None):
-
-        # create axis
-        if ax is None:
-            fig = plt.figure()
-            ax = fig.gca()
-
-        # plot states
+    def get_nobj(self):
+        return 1
 
 class Direct(Segment):
 
@@ -178,6 +174,9 @@ class Indirect(Segment):
         # set initial costates
         self.l0 = np.array(l0, float)
 
+        # duration
+        self.T = tf - t0
+
         # set initial integrator state
         self.integrator.set_initial_value(np.hstack((self.s0, self.l0)), self.t0)
 
@@ -193,9 +192,6 @@ class Indirect(Segment):
         ceq = sf - self.sf
 
         return ceq
-
-    def get_nobj(self):
-        return 1
 
     def get_nec(self):
         return self.dynamics.sdim
