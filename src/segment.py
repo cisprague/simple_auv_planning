@@ -2,6 +2,7 @@
 # christopher.iliffe.sprague@gmail.com
 
 from scipy.integrate import ode
+import numpy as np, pygmo as pg
 
 class Segment(object):
 
@@ -14,7 +15,7 @@ class Segment(object):
         self.integrator = ode(self.eom, self.eom_jac)
 
         # configure integrator
-        self.integrator.set_integrator('dop853', atol=1e-10, rtol=1e-10)
+        self.integrator.set_integrator('dop853', atol=1e-10, rtol=1e-10, verbosity=1)
 
         # set recorder
         self.integrator.set_solout(self.record)
@@ -22,7 +23,7 @@ class Segment(object):
     def record(self, time, state):
 
         # append times
-        self.times = np.hstack((self.times, time))
+        self.times = np.append(self.times, time)
 
         # append states
         self.states = np.vstack((self.states, state))
@@ -41,10 +42,10 @@ class Segment(object):
         self.Tlb, self.Tub = float(Tlb), float(Tub)
 
         # set intial state bounds
-        self.s0lb, self.s0ub = np.array(s0lb), np.array(s0ub)
+        self.s0lb, self.s0ub = np.array(s0lb, float), np.array(s0ub, float)
 
         # set intial state bounds
-        self.sflb, self.sfub = np.array(sflb), np.array(sfub)
+        self.sflb, self.sfub = np.array(sflb, float), np.array(sfub, float)
 
     def set(self, t0, s0, tf, sf):
 
@@ -52,7 +53,7 @@ class Segment(object):
         self.t0, self.tf = float(t0), float(tf)
 
         # set states
-        self.s0 = np.array(s0, float), np.array(sf, float)
+        self.s0, self.sf = np.array(s0, float), np.array(sf, float)
 
     def propagate(self):
 
@@ -64,6 +65,43 @@ class Segment(object):
 
         # return final state
         return self.states[-1]
+
+    def solve(self, otol=1e-5):
+
+        # set optimisation params
+        self.otol = otol
+
+        # instantiate optimisation problem
+        prob = pg.problem(self)
+
+        # instantiate algorithm
+        algo = pg.ipopt()
+        algo.set_numeric_option("tol", self.otol)
+        algo = pg.algorithm(algo)
+        algo.set_verbosity(1)
+
+        # instantiate and evolve population
+        pop = pg.population(prob, 1)
+        pop = algo.evolve(pop)
+
+        # extract soltution
+        self.zopt = pop.champion_x
+        self.fitness(self.zopt)
+
+        # process records
+        self.process_records()
+
+    def gradient(self, z):
+        return pg.estimate_gradient(self.fitness, z)
+
+    def plot(self, ax=None):
+
+        # create axis
+        if ax is None:
+            fig = plt.figure()
+            ax = fig.gca()
+
+        # plot states
 
 class Direct(Segment):
 
@@ -106,7 +144,6 @@ class Direct(Segment):
         # return mismatch
         return self.propagate() - self.sf
 
-
 class Indirect(Segment):
 
     def __init__(self, dynamics):
@@ -115,16 +152,7 @@ class Indirect(Segment):
         Segment.__init__(self, dynamics)
 
         # state dimensions
-        self.dim = self.dynamic.sdim*2
-
-        # free time transversality
-        self.freetime = bool(True)
-
-        # intial state transversality
-        self.tv0 = bool(False)
-
-        # final state transversality
-        self.tvf = bool(True)
+        self.dim = self.dynamics.sdim*2
 
     def eom(self, time, fullstate):
 
@@ -142,33 +170,6 @@ class Indirect(Segment):
         # return fullstate transition
         return self.dynamics.eom_fullstate_jac(fullstate, control)
 
-    def set_bounds(self, Tlb, Tub, s0lb, s0ub, sflb, sfub):
-
-        # set duration and state bounds
-        Segment.set_bounds(self, Tlb, Tub, s0lb, s0ub, sflb, sfub)
-
-        # free time transversality
-        if Tlb == Tub:
-            self.freetime = False
-        else:
-            self.freetime = True
-
-        # initial state transversality conditions
-        self.tv0l, self.tv0l = list(), list()
-        for l, u in zip(s0lb, s0ub):
-            if l == u:
-                self.tv0l.append(False)
-            else:
-                self.tv0l.append(True)
-
-        # initial state transversality conditions
-        self.tvfl, self.tvfl = list(), list()
-        for l, u in zip(sflb, sfub):
-            if l == u:
-                self.tvfl.append(False)
-            else:
-                self.tvfl.append(True)
-
     def set(self, t0, s0, tf, sf, l0):
 
         # set states and time
@@ -178,17 +179,7 @@ class Indirect(Segment):
         self.l0 = np.array(l0, float)
 
         # set initial integrator state
-        self.set_integrator(np.hstack((self.s0, self.l0)), self.t0)
-
-    def set_transversality(self, tv0, tvf, tvH):
-
-        # consider inital state transversality
-        self.tv0 = bool(tv0)
-        # consider final state transversality
-        self.tvf = bool(tvf)
-        # consider duration transversality
-        self.tvH = bool(tvH)
-
+        self.integrator.set_initial_value(np.hstack((self.s0, self.l0)), self.t0)
 
     def mismatch(self):
 
@@ -201,38 +192,17 @@ class Indirect(Segment):
         # compute state mismatch
         ceq = sf - self.sf
 
-        # inital transversality constraints
-        if self.tv0:
-            ceq = np.hstack((ceq, self.l0[self.tv0l]))
-
-        # final transversality conditions
-        if self.tvf:
-            # compute final costate
-            lf = fsf[self.dynamics.sdim:]
-            ceq = np.hstack((ceq, fsf[self.tvfl]))
-
-        # free time transversality
-        if self.tvH and self.freetime:
-            # compute control
-            uf = self.dynamics.control(fsf)
-            # compute Hamiltonian
-            ceq = np.hstack((ceq, self.dynamics.hamiltonian(fsf, uf)))
-
         return ceq
 
     def get_nobj(self):
-        return int(1)
+        return 1
 
     def get_nec(self):
-        nec = self.dynamics.sdim
-        if tv0: nec += sum(self.tv0l)
-        if tvf: nec += sum(self.tv0f)
-        if tvH and self.freetime: nec += 1
-        return int(nec)
+        return self.dynamics.sdim
 
     def get_bounds(self):
-        lb = [self.Tlb, *self.s0lb, *self.sflb, *[-100]*self.dynamics.sdim]
-        ub = [self.Tub, *self.s0ub, *self.sfub, *[100]*self.dynamics.sdim]
+        lb = np.array([self.Tlb, *self.s0lb, *self.sflb, *[-100]*self.dynamics.sdim], float)
+        ub = np.array([self.Tub, *self.s0ub, *self.sfub, *[100]*self.dynamics.sdim], float)
         return (lb, ub)
 
     def fitness(self, z):
@@ -251,3 +221,8 @@ class Indirect(Segment):
 
         # return fitness
         return np.hstack(([1], ceq))
+
+    def process_records(self):
+
+        # controls
+        self.controls = np.apply_along_axis(self.dynamics.pontryagin, 1, self.states)
