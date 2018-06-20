@@ -8,15 +8,15 @@ class Farm(object):
     def __init__(self, dx, dy, dw, lx, N, dsx, dsy):
 
         # x and y padding between wall area and farm borders [m]
-        self.dx, self.dy = dx, dy
+        self.dx, self.dy = float(dx), float(dy)
         # seperation between walls [m]
-        self.dw = dw
+        self.dw = float(dw)
         # length of walls and x length of wall space [m]
-        self.lx = lx
+        self.lx = float(lx)
         # number of walls
-        self.N = N
+        self.N = int(N)
         # docking station position [m]
-        self.dsx, self.dsy = dsx, dsy
+        self.dsx, self.dsy = float(dsx),float(dsy)
 
         # y length of wall space
         self.ly = (self.N - 1)*self.dw
@@ -94,14 +94,14 @@ class Farm(object):
 
         # plot waypoints
         pts = self.simple_coverage()
-        ax.plot(pts.T[0], pts.T[1], "k.-")
+        ax.plot(pts.T[0], pts.T[1], "k.")
 
         try:
             return fig
         except:
             return ax
 
-    def simple_coverage(self):
+    def simple_coverage(self, start=False, finish=False):
 
         # covergage points
         pts = np.empty(shape=(0, 2), dtype=float)
@@ -159,10 +159,7 @@ class Farm(object):
                     ))
 
             # append points
-
             n += 1
-
-
 
         return pts
 
@@ -178,6 +175,6 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
     fig, ax = plt.subplots(1)
     farm.plot(ax)
-    ax.plot(pts.T[0], pts.T[1], "k.-")
+
 
     plt.show()

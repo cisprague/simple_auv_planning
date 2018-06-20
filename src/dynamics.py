@@ -5,13 +5,25 @@ import numpy as np
 
 class Dynamics(object):
 
-    def __init__(self, thrust, mass):
+    def __init__(self, thrust=10, mass=25, area=0.5, CD=0.47, rho=997, theta=0, vf=0.1):
 
-        # thrust
+        # thrust [N]
         self.thrust = float(thrust)
 
-        # mass
+        # mass [kg]
         self.mass = float(mass)
+
+        # planaform area [m^2]
+        self.A = float(area)
+
+        # coefficient of drag
+        self.CD = float(CD)
+
+        # fluid density [kg/m^3]
+        self.rho = float(rho)
+
+        # fluid velocity direction [rad]
+        self.theta = float(theta)
 
         # homotopy
         self.alpha = float(0)
@@ -34,10 +46,13 @@ class Dynamics(object):
         ut, ux, uy = control
 
         # common subexpression elimination
-        e0 = self.thrust*ut/self.mass
+        x0 = 1/self.mass
+        x1 = self.thrust*ut*x0
+        x2 = self.A*self.CD*self.rho*x0*np.sqrt(vx**2 + vy**2)/2
 
-        # return state transition vector
-        return np.array([vx, vy, ux*e0, uy*e0], float)
+        # return state transition
+        ds = np.array([vx, vy, ux*x1 - vx*x2, uy*x1 - vy*x2], float)
+        return ds
 
     def eom_state_jac(self, state, control):
 
@@ -47,13 +62,23 @@ class Dynamics(object):
         # extract control
         ut, ux, uy = control
 
+        # common subexpression elimination
+        x0 = 1/self.mass
+        x1 = vx**2
+        x2 = vy**2
+        x3 = np.sqrt(x1 + x2)
+        x4 = -self.A*self.CD*self.rho*x0*x3/2
+        x5 = self.A*self.CD*self.rho*x0/(2*x3)
+        x6 = -vx*vy*x5
+
         # return state transition Jacobian
-        return np.array([
-            [0, 0, 1, 0],
-            [0, 0, 0, 1],
-            [0, 0, 0, 0],
-            [0, 0, 0, 0]
+        dds = np.array([
+            [0, 0,           1,           0],
+            [0, 0,           0,           1],
+            [0, 0, -x1*x5 + x4,          x6],
+            [0, 0,          x6, -x2*x5 + x4]
         ], float)
+        return dds
 
     def eom_fullstate(self, fullstate, control):
 
